@@ -10,7 +10,9 @@ contract MedicalInsuranceClaim {
         address patient;
         string diagnosis;
         uint256 cost;
+        string treatment;
         uint256 duration; // lama rawat inap dalam hari
+        address hospital;
         bool exists;
     }
 
@@ -121,9 +123,9 @@ contract MedicalInsuranceClaim {
     }
 
     // RUMAH SAKIT mencatat data medis pasien
-    function submitMedicalRecord(address _patient, string memory _diagnosis, uint256 _cost, uint256 _duration) public onlyVerifiedHospital {
+    function submitMedicalRecord(address _patient, string memory _diagnosis, uint256 _cost, string memory _treatment, uint256 _duration) public onlyVerifiedHospital {
         recordCounter++;
-        medicalRecords[recordCounter] = MedicalRecord(_patient, _diagnosis, _cost, _duration, true);
+        medicalRecords[recordCounter] = MedicalRecord(_patient, _diagnosis, _cost, _treatment, _duration, msg.sender, true);
         patientRecords[_patient].push(recordCounter); // Tambah ID ke daftar pasien
     }
 
@@ -166,22 +168,22 @@ contract MedicalInsuranceClaim {
         return (record.patient, record.diagnosis, record.cost, record.duration);
     }
 
-    // (Opsional) dapatkan semua record milik satu pasien
-    function getAllRecordsByPatient(address _patient) public view returns (uint256[] memory) {
-        uint256[] memory temp = new uint256[](recordCounter);
+    function getPatientsByHospital(address _hospital) public view returns (address[] memory) {
+        address[] memory temp = new address[](recordCounter);
         uint256 count = 0;
+
         for (uint256 i = 1; i <= recordCounter; i++) {
-            if (medicalRecords[i].patient == _patient) {
-                temp[count] = i;
+            if (medicalRecords[i].hospital == _hospital) {
+                temp[count] = medicalRecords[i].patient;
                 count++;
             }
         }
 
-        // copy ke array dengan ukuran tetap
-        uint256[] memory result = new uint256[](count);
+        address[] memory result = new address[](count);
         for (uint256 j = 0; j < count; j++) {
             result[j] = temp[j];
         }
+
         return result;
     }
 }

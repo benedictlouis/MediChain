@@ -13,14 +13,16 @@ const Hospital = () => {
   const [patientAddress, setPatientAddress] = useState('');
   const [diagnosis, setDiagnosis] = useState('');
   const [cost, setCost] = useState('');
+  const [treatment, setTreatment] = useState(''); 
   const [duration, setDuration] = useState('');
   
-  // Untuk get record
   const [recordIdToView, setRecordIdToView] = useState('');
   const [recordData, setRecordData] = useState(null);
   
-  // Daftar record milik pasien (address account)
   const [patientRecordIds, setPatientRecordIds] = useState([]);
+
+  const [hospitalPatients, setHospitalPatients] = useState([]);
+
 
   useEffect(() => {
     async function init() {
@@ -54,6 +56,7 @@ const Hospital = () => {
         patientAddress,
         diagnosis,
         Number(cost),
+        treatment,
         Number(duration)
       );
       await tx.wait();
@@ -61,10 +64,11 @@ const Hospital = () => {
       setPatientAddress('');
       setDiagnosis('');
       setCost('');
+      setTreatment('');
       setDuration('');
     } catch (error) {
-      console.error("Submit medical record error:", error);
-      alert("Gagal submit medical record");
+        console.error("Submit medical record error:", error.reason || error.message || error);
+        alert("Gagal submit medical record");
     }
   };
 
@@ -100,6 +104,22 @@ const Hospital = () => {
     }
   };
 
+  const fetchPatientsByHospital = async () => {
+    if (!contract || !account) {
+        alert("Contract atau akun belum siap");
+        return;
+    }
+
+    try {
+        const result = await contract.getPatientsByHospital(account);
+        setHospitalPatients(result);
+    } catch (err) {
+        console.error("Gagal ambil daftar pasien:", err);
+        alert("Gagal mengambil data pasien rumah sakit");
+    }
+};
+
+
   useEffect(() => {
     if (contract && account) {
       fetchPatientRecordIds();
@@ -131,6 +151,13 @@ const Hospital = () => {
           placeholder="Cost"
           value={cost}
           onChange={(e) => setCost(e.target.value)}
+          className="border p-2 mb-2 w-full rounded"
+        />
+        <input
+          type="text"
+          placeholder="Treatment"
+          value={treatment}
+          onChange={(e) => setTreatment(e.target.value)}
           className="border p-2 mb-2 w-full rounded"
         />
         <input
@@ -174,18 +201,24 @@ const Hospital = () => {
         )}
       </div>
 
-      <div className="p-4 border rounded shadow-sm bg-white">
-        <h2 className="text-xl font-semibold mb-4">Patient Record IDs</h2>
-        {patientRecordIds.length === 0 ? (
-          <p>No records found.</p>
+      <div className="mt-8 p-4 border rounded shadow-sm bg-white">
+        <h2 className="text-xl font-semibold mb-4">List of Patients</h2>
+        <button
+          onClick={fetchPatientsByHospital}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 mb-4"
+        >
+          Fetch Patients
+        </button>
+        {hospitalPatients.length === 0 ? (
+          <p>No patients found.</p>
         ) : (
           <ul className="list-disc pl-5">
-            {patientRecordIds.map((id) => (
-              <li key={id}>Record ID: {id}</li>
+            {hospitalPatients.map((patient, index) => (
+              <li key={index}>Patient Address: {patient}</li>
             ))}
           </ul>
         )}
-      </div>
+        </div>
     </div>
   );
 };

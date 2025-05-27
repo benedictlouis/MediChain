@@ -1,6 +1,6 @@
 export const contractAddress = "0x5fbdb2315678afecb367f032d93f642f64180aa3"; 
 export const contractABI = [
-    {
+   {
       "inputs": [],
       "stateMutability": "nonpayable",
       "type": "constructor"
@@ -81,25 +81,6 @@ export const contractABI = [
           "internalType": "enum MedicalInsuranceClaim.ClaimStatus",
           "name": "status",
           "type": "uint8"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "_patient",
-          "type": "address"
-        }
-      ],
-      "name": "getAllRecordsByPatient",
-      "outputs": [
-        {
-          "internalType": "uint256[]",
-          "name": "",
-          "type": "uint256[]"
         }
       ],
       "stateMutability": "view",
@@ -225,6 +206,25 @@ export const contractABI = [
     {
       "inputs": [
         {
+          "internalType": "address",
+          "name": "_hospital",
+          "type": "address"
+        }
+      ],
+      "name": "getPatientsByHospital",
+      "outputs": [
+        {
+          "internalType": "address[]",
+          "name": "",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
           "internalType": "uint256",
           "name": "",
           "type": "uint256"
@@ -286,9 +286,19 @@ export const contractABI = [
           "type": "uint256"
         },
         {
+          "internalType": "string",
+          "name": "treatment",
+          "type": "string"
+        },
+        {
           "internalType": "uint256",
           "name": "duration",
           "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "hospital",
+          "type": "address"
         },
         {
           "internalType": "bool",
@@ -370,6 +380,11 @@ export const contractABI = [
           "internalType": "uint256",
           "name": "_cost",
           "type": "uint256"
+        },
+        {
+          "internalType": "string",
+          "name": "_treatment",
+          "type": "string"
         },
         {
           "internalType": "uint256",
