@@ -161,11 +161,12 @@ contract MedicalInsuranceClaim {
         address patient,
         string memory diagnosis,
         uint256 cost,
+        string memory treatment,
         uint256 duration
     ) {
         require(medicalRecords[_recordId].exists, "Rekam medis tidak ditemukan.");
         MedicalRecord memory record = medicalRecords[_recordId];
-        return (record.patient, record.diagnosis, record.cost, record.duration);
+        return (record.patient, record.diagnosis, record.cost, record.treatment, record.duration);
     }
 
     function getPatientsByHospital(address _hospital) public view returns (address[] memory) {

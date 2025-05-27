@@ -83,7 +83,8 @@ const Hospital = () => {
         patient: data[0],
         diagnosis: data[1],
         cost: data[2].toString(),
-        duration: data[3].toString()
+        treatment: data[3].toString(),
+        duration: data[4].toString()
       });
     } catch (err) {
       alert("Data tidak ditemukan atau ID salah");
@@ -196,7 +197,8 @@ const Hospital = () => {
             <p><strong>Patient:</strong> {recordData.patient}</p>
             <p><strong>Diagnosis:</strong> {recordData.diagnosis}</p>
             <p><strong>Cost:</strong> {recordData.cost}</p>
-            <p><strong>Duration:</strong> {recordData.duration} days</p>
+            <p><strong>Treatment:</strong> {recordData.treatment}</p>
+            <p><strong>Duration:</strong> {recordData.duration}</p>
           </div>
         )}
       </div>
