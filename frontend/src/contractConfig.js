@@ -1,6 +1,6 @@
 export const contractAddress = "0x5fbdb2315678afecb367f032d93f642f64180aa3"; 
 export const contractABI = [
-   {
+  {
       "inputs": [],
       "stateMutability": "nonpayable",
       "type": "constructor"
@@ -155,6 +155,11 @@ export const contractABI = [
           "internalType": "uint256",
           "name": "cost",
           "type": "uint256"
+        },
+        {
+          "internalType": "string",
+          "name": "treatment",
+          "type": "string"
         },
         {
           "internalType": "uint256",
