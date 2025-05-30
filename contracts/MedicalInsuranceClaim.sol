@@ -187,4 +187,57 @@ contract MedicalInsuranceClaim {
 
         return result;
     }
+
+     function getRecordAndClaimDetails(uint256 _recordId) public view returns (
+        address patient,
+        string memory diagnosis,
+        uint256 cost,
+        string memory treatment,
+        uint256 duration,
+        address hospital,
+        string memory status,
+        bool exists
+    ) {
+        require(medicalRecords[_recordId].exists, "Rekam medis tidak ditemukan.");
+        MedicalRecord storage recordData = medicalRecords[_recordId];
+        
+        uint256 claimId = 0;
+        // Cari claimId yang berasosiasi dengan recordId ini
+        // Catatan: loop ini bisa menjadi tidak efisien jika jumlah klaim sangat banyak.
+        for (uint256 i = 1; i <= claimCounter; i++) {
+            if (claims[i].recordId == _recordId) {
+                claimId = i;
+                break; // Asumsikan satu rekam medis hanya punya satu klaim
+            }
+        }
+
+        string memory claimStatus;
+        if (claimId != 0) {
+            claimStatus = _getClaimStatusString(claims[claimId].status);
+        } else {
+            claimStatus = "Belum Diajukan"; // Status jika belum ada klaim
+        }
+
+        return (
+            recordData.patient,
+            recordData.diagnosis,
+            recordData.cost,
+            recordData.treatment,
+            recordData.duration,
+            recordData.hospital,
+            claimStatus,
+            recordData.exists
+        );
+    }
+
+    function _getClaimStatusString(ClaimStatus _status) internal pure returns (string memory) {
+        if (_status == ClaimStatus.Pending) {
+            return "Pending";
+        } else if (_status == ClaimStatus.Approved) {
+            return "Approved";
+        } else if (_status == ClaimStatus.Rejected) {
+            return "Rejected";
+        }
+        return "Unknown"; // Seharusnya tidak pernah terjadi
+    }
 }
