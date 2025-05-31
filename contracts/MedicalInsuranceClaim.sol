@@ -4,16 +4,15 @@ pragma solidity ^0.8.20;
 contract MedicalInsuranceClaim {
     address public admin;
 
-    enum ClaimStatus { Pending, Approved, Rejected }
+    enum ClaimStatus { Pending, Approved, Rejected, NotClaimed }
 
     struct MedicalRecord {
         address patient;
-        string diagnosis;
-        uint256 cost;
-        string treatment;
-        uint256 duration; // lama rawat inap dalam hari
+        string ipfsHash; // ADDED: The hash/CID from IPFS pointing to the encrypted medical data
+        uint256 cost;    // REMAINS: Kept on-chain for smart contract logic (e.g., claim validation)
         address hospital;
         bool exists;
+        // REMOVED: string diagnosis, string treatment, uint256 duration
     }
 
     struct Claim {
@@ -31,7 +30,9 @@ contract MedicalInsuranceClaim {
     mapping(address => bool) public verifiedHospitals;
     mapping(address => bool) public verifiedInsurance;
 
-    mapping(address => uint256[]) public patientRecords;
+    mapping(address => uint256[]) public recordsByPatient;
+    mapping(address => uint256[]) public claimsByPatient;
+    mapping(uint256 => uint256) public claimIdByRecordId;
 
     address[] public hospitalList;
     address[] public insuranceList;
@@ -122,20 +123,46 @@ contract MedicalInsuranceClaim {
         return insuranceList;
     }
 
+     // OPTIMIZED: This now reads directly from a mapping, saving immense gas costs.
+    function getRecordsByPatient(address _patient) public view returns (uint256[] memory) {
+        return recordsByPatient[_patient];
+    }
+    
+    // OPTIMIZED: This also reads directly from a mapping.
+    function getClaimsByPatient(address _patient) public view returns (uint256[] memory) {
+        return claimsByPatient[_patient];
+    }
+
     // RUMAH SAKIT mencatat data medis pasien
-    function submitMedicalRecord(address _patient, string memory _diagnosis, uint256 _cost, string memory _treatment, uint256 _duration) public onlyVerifiedHospital {
+    function submitMedicalRecord(
+        address _patient,
+        string memory _ipfsHash, // CHANGED
+        uint256 _cost
+    ) public onlyVerifiedHospital {
         recordCounter++;
-        medicalRecords[recordCounter] = MedicalRecord(_patient, _diagnosis, _cost, _treatment, _duration, msg.sender, true);
-        patientRecords[_patient].push(recordCounter); // Tambah ID ke daftar pasien
+        medicalRecords[recordCounter] = MedicalRecord(
+            _patient,
+            _ipfsHash, // CHANGED
+            _cost,
+            msg.sender,
+            true
+        );
+        recordsByPatient[_patient].push(recordCounter);
     }
 
     // PASIEN mengajukan klaim berdasarkan ID rekam medis
-    function submitClaim(uint256 _recordId, address _insuranceCompany) public {
-        require(medicalRecords[_recordId].exists, "Data tidak ditemukan.");
-        require(medicalRecords[_recordId].patient == msg.sender, "Bukan pemilik data.");
+   function submitClaim(uint256 _recordId, address _insuranceCompany) public {
+        MedicalRecord storage record_ = medicalRecords[_recordId];
+        require(record_.exists, "Medical record does not exist.");
+        require(record_.patient == msg.sender, "Only the patient can submit a claim for their record.");
+        require(claimIdByRecordId[_recordId] == 0, "This record has already been claimed."); // Prevent duplicate claims
 
         claimCounter++;
         claims[claimCounter] = Claim(_recordId, _insuranceCompany, ClaimStatus.Pending);
+        
+        // Add to our efficient lookup mappings
+        claimIdByRecordId[_recordId] = claimCounter;
+        claimsByPatient[msg.sender].push(claimCounter);
     }
 
     // PERUSAHAAN ASURANSI memvalidasi klaim
@@ -159,14 +186,13 @@ contract MedicalInsuranceClaim {
     // Tambahan: dapatkan data rekam medis lengkap
     function getMedicalRecord(uint256 _recordId) public view returns (
         address patient,
-        string memory diagnosis,
+        string memory ipfsHash,
         uint256 cost,
-        string memory treatment,
-        uint256 duration
+        address hospital
     ) {
-        require(medicalRecords[_recordId].exists, "Rekam medis tidak ditemukan.");
-        MedicalRecord memory record = medicalRecords[_recordId];
-        return (record.patient, record.diagnosis, record.cost, record.treatment, record.duration);
+        require(medicalRecords[_recordId].exists, "Medical record does not exist.");
+        MedicalRecord storage record_ = medicalRecords[_recordId];
+        return (record_.patient, record_.ipfsHash, record_.cost, record_.hospital);
     }
 
     function getPatientsByHospital(address _hospital) public view returns (address[] memory) {
@@ -188,48 +214,41 @@ contract MedicalInsuranceClaim {
         return result;
     }
 
-     function getRecordAndClaimDetails(uint256 _recordId) public view returns (
+    function getRecordAndClaimDetails(uint256 _recordId) public view returns (
         address patient,
-        string memory diagnosis,
+        string memory ipfsHash,
         uint256 cost,
-        string memory treatment,
-        uint256 duration,
         address hospital,
-        string memory status,
-        bool exists
+        ClaimStatus status,
+        address insuranceCompany
     ) {
-        require(medicalRecords[_recordId].exists, "Rekam medis tidak ditemukan.");
+        require(medicalRecords[_recordId].exists, "Medical record does not exist.");
         MedicalRecord storage recordData = medicalRecords[_recordId];
         
-        uint256 claimId = 0;
-        // Cari claimId yang berasosiasi dengan recordId ini
-        // Catatan: loop ini bisa menjadi tidak efisien jika jumlah klaim sangat banyak.
-        for (uint256 i = 1; i <= claimCounter; i++) {
-            if (claims[i].recordId == _recordId) {
-                claimId = i;
-                break; // Asumsikan satu rekam medis hanya punya satu klaim
-            }
-        }
-
-        string memory claimStatus;
+        uint256 claimId = claimIdByRecordId[_recordId];
         if (claimId != 0) {
-            claimStatus = _getClaimStatusString(claims[claimId].status);
+            Claim storage claimData = claims[claimId];
+            return (
+                recordData.patient,
+                recordData.ipfsHash,
+                recordData.cost,
+                recordData.hospital,
+                claimData.status,
+                claimData.insuranceCompany
+            );
         } else {
-            claimStatus = "Belum Diajukan"; // Status jika belum ada klaim
+            // If no claim exists for this record
+            return (
+                recordData.patient,
+                recordData.ipfsHash,
+                recordData.cost,
+                recordData.hospital,
+                ClaimStatus.NotClaimed,
+                address(0) // No insurance company involved yet
+            );
         }
-
-        return (
-            recordData.patient,
-            recordData.diagnosis,
-            recordData.cost,
-            recordData.treatment,
-            recordData.duration,
-            recordData.hospital,
-            claimStatus,
-            recordData.exists
-        );
     }
-
+    
     function _getClaimStatusString(ClaimStatus _status) internal pure returns (string memory) {
         if (_status == ClaimStatus.Pending) {
             return "Pending";
@@ -237,7 +256,9 @@ contract MedicalInsuranceClaim {
             return "Approved";
         } else if (_status == ClaimStatus.Rejected) {
             return "Rejected";
+        } else if (_status == ClaimStatus.NotClaimed) { // ADDED: Handle NotClaimed
+            return "Not Claimed";
         }
-        return "Unknown"; // Seharusnya tidak pernah terjadi
+        return "Unknown";
     }
 }

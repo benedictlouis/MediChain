@@ -33,6 +33,7 @@ const Login = () => {
       const provider = new BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
       const userAddress = await signer.getAddress();
+      console.log("Attempting login with userAddress:", userAddress)
 
       setWalletAddress(userAddress);
       setConnected(true);
@@ -40,6 +41,8 @@ const Login = () => {
       const contract = new Contract(contractAddress, contractABI, signer);
 
       const adminAddress = await contract.admin();
+      console.log("Admin address from contract:", adminAddress);
+      
       if (adminAddress.toLowerCase() === userAddress.toLowerCase()) {
         toast({
           title: "Login Successful",

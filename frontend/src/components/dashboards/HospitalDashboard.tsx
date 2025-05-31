@@ -1,30 +1,57 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react"; 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Users, FileText, Plus, Search } from "lucide-react";
-import { toast } from "@/hooks/use-toast"; 
-import DashboardHeader from "@/components/DashboardHeader"; 
-import { BrowserProvider, Contract, ethers } from 'ethers';
+import { Building2, Users, FileText, Plus, Search, CalendarDays, DollarSign } from "lucide-react"; 
+import { toast } from "@/hooks/use-toast";
+import DashboardHeader from "@/components/DashboardHeader";
+import { BrowserProvider, Contract, ethers, formatUnits } from 'ethers'; 
 import { contractAddress, contractABI } from '@/contractConfig';
+import axios from 'axios';
 
 interface HospitalDashboardProps {
-  connectedAccount: string; 
+  connectedAccount: string;
   onLogout: () => void;
 }
 
 interface PatientUIData {
-  id: string; 
+  id: string;
   name: string;
   lastVisit: string;
   status: string;
-  records: number; 
+  records: number; // This could be updated based on fetched records for the patient
 }
 
+// For data fetched from IPFS for a medical record
+interface MedicalRecordIPFSData {
+  diagnosis: string;
+  treatment: string;
+  duration?: number;
+  patientId?: string;
+  hospital?: string;
+  submittedAt: string; // Crucial for "Records This Month" - ISO string format
+}
+
+// For data from the smart contract's MedicalRecord struct
+interface MedicalRecordOnChainData {
+  id: string; // Record ID
+  patient: string;
+  ipfsHash: string;
+  cost: bigint; // Comes as BigInt from contract
+  hospital: string; // Hospital address that submitted it
+  exists: boolean;
+}
+
+// Combined UI data structure for a medical record
+interface MedicalRecordUI extends Omit<MedicalRecordOnChainData, 'exists' | 'cost'> {
+  cost: number; // Store cost as a number for calculations
+  ipfsData?: MedicalRecordIPFSData; // Optional because IPFS fetch might fail or data might be partial
+}
+
+
 const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProps) => {
-  // State untuk form input
   const [patientId, setPatientId] = useState("");
   const [diagnosis, setDiagnosis] = useState("");
   const [treatment, setTreatment] = useState("");
@@ -32,8 +59,13 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
   const [duration, setDuration] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [contractInstance, setContractInstance] = useState<Contract | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [hospitalPatientList, setHospitalPatientList] = useState<PatientUIData[]>([]);
+  const [allHospitalRecords, setAllHospitalRecords] = useState<MedicalRecordUI[]>([]);
+  const [isLoadingStats, setIsLoadingStats] = useState(true); // For loading state of stats cards
+
+  const PINATA_GATEWAY_URL = import.meta.env.VITE_PINATA_GATEWAY_URL;
 
   useEffect(() => {
     async function initWeb3() {
@@ -48,12 +80,6 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
       try {
         const provider = new BrowserProvider(window.ethereum);
         const signer = await provider.getSigner();
-        const signerAddress = await signer.getAddress();
-
-         if (signerAddress.toLowerCase() !== connectedAccount.toLowerCase()) {
-           console.warn("Akun MetaMask yang aktif berbeda dengan connectedAccount prop.");
-         }
-
         const contract = new Contract(contractAddress, contractABI, signer);
         setContractInstance(contract);
       } catch (error) {
@@ -65,45 +91,83 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
         });
       }
     }
-    initWeb3();
-  }, [connectedAccount]); // Re-init jika connectedAccount berubah
+    if (connectedAccount) {
+        initWeb3();
+    }
+  }, [connectedAccount]);
 
-  // Fetch pasien ketika contractInstance sudah siap dan connectedAccount (alamat RS) ada
+  const fetchAllMedicalRecordsForHospital = async () => {
+    if (!contractInstance || !connectedAccount || !PINATA_GATEWAY_URL) {
+        if (!PINATA_GATEWAY_URL) console.error("Pinata Gateway URL not configured");
+        return;
+    }
+    setIsLoadingStats(true);
+    const records: MedicalRecordUI[] = [];
+    try {
+        const recordCounter = await contractInstance.recordCounter();
+        const totalRecords = Number(recordCounter);
+
+        for (let i = 1; i <= totalRecords; i++) {
+            const recordId = i.toString();
+            const onChainData: MedicalRecordOnChainData = await contractInstance.medicalRecords(recordId);
+
+            if (onChainData.exists && onChainData.hospital.toLowerCase() === connectedAccount.toLowerCase()) {
+                let ipfsDataContent: MedicalRecordIPFSData | undefined = undefined;
+                if (onChainData.ipfsHash) {
+                    try {
+                        const ipfsUrl = `${PINATA_GATEWAY_URL}/ipfs/${onChainData.ipfsHash}`;
+                        const response = await axios.get<MedicalRecordIPFSData>(ipfsUrl);
+                        ipfsDataContent = response.data;
+                    } catch (ipfsError) {
+                        console.warn(`Failed to fetch IPFS data for record ${recordId}:`, ipfsError);
+                    }
+                }
+                records.push({
+                    id: recordId,
+                    patient: onChainData.patient,
+                    ipfsHash: onChainData.ipfsHash,
+                    // Assuming cost is stored in wei or smallest unit. Convert to a number.
+                    // If your cost is stored as, e.g., IDR directly, then Number(onChainData.cost) might be enough.
+                    // For this example, let's assume it's like 'wei' and we want to display it as a whole number.
+                    cost: Number(formatUnits(onChainData.cost, 0)), // Adjust '0' if you use decimals
+                    hospital: onChainData.hospital,
+                    ipfsData: ipfsDataContent,
+                });
+            }
+        }
+        setAllHospitalRecords(records);
+    } catch (error) {
+        console.error("Failed to fetch medical records for hospital:", error);
+        toast({
+            title: "Error Fetching Records",
+            description: "Could not retrieve all medical records for the hospital.",
+            variant: "destructive",
+        });
+    } finally {
+        setIsLoadingStats(false);
+    }
+  };
+
+
   useEffect(() => {
     if (contractInstance && connectedAccount) {
       fetchPatientsForHospital(connectedAccount);
+      fetchAllMedicalRecordsForHospital(); // Fetch records for stats
     }
-  }, [contractInstance, connectedAccount]);
+  }, [contractInstance, connectedAccount, PINATA_GATEWAY_URL]); // Added PINATA_GATEWAY_URL
 
-  const fetchPatientsForHospital = async (hospitalAddress: string) => {
+   const fetchPatientsForHospital = async (hospitalAddress: string) => {
     if (!contractInstance) return;
     try {
-      const patientAddresses: string[] = await contractInstance.getPatientsByHospital(hospitalAddress);
-      
-      // Memetakan alamat pasien ke struktur data UI
-      // Detail seperti nama, lastVisit, dll. perlu sumber data tambahan atau modifikasi kontrak
-      // Untuk saat ini, kita gunakan placeholder
-      const formattedPatients: PatientUIData[] = await Promise.all(patientAddresses.map(async (addr, index) => {
-        let recordCount = 0;
-        try {
-          // Cobalah untuk mendapatkan jumlah record jika fungsi getPatientRecords ada dan bisa diakses
-          // Asumsi getPatientRecords mengembalikan array ID rekam medis untuk seorang pasien
-          // Jika fungsi ini untuk hospital, maka penyesuaian diperlukan.
-          // Untuk contoh ini, asumsikan ada fungsi `getRecordCountForPatient(patientAddress)`
-          // atau kita bisa hitung dari `getPatientRecords(addr)`.
-          // Ini hanya ilustrasi, sesuaikan dengan fungsi kontrak Anda.
-          // const recordsArray = await contractInstance.getPatientRecords(addr); // Ini mungkin bukan untuk hospital
-          // recordCount = recordsArray.length;
-        } catch (e) {
-            // console.warn(`Tidak bisa mengambil jumlah record untuk pasien ${addr}`, e);
-        }
-        return {
-          id: addr,
-          name: `Patient ${addr.slice(0, 6)}...${addr.slice(-4)}`, // Placeholder
-          lastVisit: new Date().toLocaleDateString(), // Placeholder
-          status: "active", // Placeholder
-          records: recordCount, // Placeholder atau 0
-        };
+      const patientAddressesFromContract: string[] = await contractInstance.getPatientsByHospital(hospitalAddress);
+      const uniquePatientAddresses = [...new Set(patientAddressesFromContract)];
+
+      const formattedPatients: PatientUIData[] = uniquePatientAddresses.map((addr) => ({
+        id: addr,
+        name: `Patient ${addr.slice(0, 6)}...${addr.slice(-4)}`,
+        lastVisit: new Date().toLocaleDateString(), 
+        status: "active", 
+        records: allHospitalRecords.filter(rec => rec.patient.toLowerCase() === addr.toLowerCase()).length, // Update record count
       }));
       setHospitalPatientList(formattedPatients);
     } catch (err: any) {
@@ -113,9 +177,49 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
         description: err?.data?.message || err?.reason || "Gagal mengambil data pasien dari smart contract.",
         variant: "destructive",
       });
-      setHospitalPatientList([]); // Kosongkan jika gagal
+      setHospitalPatientList([]);
     }
   };
+
+  // Recalculate patient record counts when allHospitalRecords changes
+  useEffect(() => {
+    if (hospitalPatientList.length > 0 && allHospitalRecords.length > 0) {
+        setHospitalPatientList(prevList => 
+            prevList.map(p => ({
+                ...p,
+                records: allHospitalRecords.filter(rec => rec.patient.toLowerCase() === p.id.toLowerCase()).length
+            }))
+        );
+    }
+  }, [allHospitalRecords, hospitalPatientList.length]); // Note: hospitalPatientList.length to avoid loop with object
+
+  const hospitalStats = useMemo(() => {
+    const totalRecords = allHospitalRecords.length;
+    
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    const recordsThisMonth = allHospitalRecords.filter(record => {
+        if (record.ipfsData?.submittedAt) {
+            try {
+                const submittedDate = new Date(record.ipfsData.submittedAt);
+                return submittedDate.getMonth() === currentMonth && submittedDate.getFullYear() === currentYear;
+            } catch (e) { return false; /* Invalid date format in IPFS */ }
+        }
+        return false;
+    }).length;
+
+    const totalCostSum = allHospitalRecords.reduce((sum, record) => sum + record.cost, 0);
+    const averageTreatmentCost = totalRecords > 0 ? totalCostSum / totalRecords : 0;
+
+    return {
+        totalMedicalRecords: totalRecords,
+        recordsThisMonth: recordsThisMonth,
+        averageTreatmentCost: averageTreatmentCost,
+    };
+  }, [allHospitalRecords]);
+
 
   const handleSubmitRecord = async () => {
     if (!patientId || !diagnosis || !treatment || !cost || !duration) {
@@ -131,53 +235,97 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
       return;
     }
 
+    setIsSubmitting(true);
     try {
-      const costInWei = ethers.parseUnits(cost, 'ether'); // Atau unit lain yang sesuai, jika cost dalam ETH
-                                                        // Jika cost hanya angka biasa (misal USD), biarkan Number(cost)
-                                                        // Sesuaikan ini dengan bagaimana kontrak Anda menangani 'cost'
+      const medicalDataForIpfs = {
+        pinataContent: { 
+            diagnosis,
+            treatment,
+            duration: Number(duration), 
+            patientId, 
+            hospital: connectedAccount, 
+            submittedAt: new Date().toISOString(), // Add submittedAt
+        },
+        pinataMetadata: {
+            name: `MedicalRecord_${patientId}_${Date.now()}`,
+            keyvalues: { 
+                patientId: patientId,
+                hospitalAddress: connectedAccount
+            }
+        }
+      };
+
+      const backendUploadUrl = 'http://localhost:3001/api/upload';       
+      let ipfsHash = '';
+      try {
+        const response = await axios.post(backendUploadUrl, medicalDataForIpfs);
+        ipfsHash = response.data.ipfsHash;
+        if (!ipfsHash) {
+            throw new Error("IPFS hash not returned from backend.");
+        }
+        toast({
+          title: "Data diunggah ke IPFS",
+          description: `Hash: ${ipfsHash.slice(0,10)}...${ipfsHash.slice(-4)}`,
+        });
+      } catch (uploadError: any) {
+        console.error('Gagal upload ke IPFS via backend:', uploadError);
+        toast({
+            title: "Gagal Upload ke IPFS",
+            description: uploadError.response?.data?.error || uploadError.message || "Terjadi kesalahan saat menghubungi server backend.",
+            variant: "destructive",
+        });
+        setIsSubmitting(false);
+        return;
+      }
+      
+      // Ensure cost is a positive integer string before parsing
+      const costInSmallestUnit = ethers.parseUnits(cost.toString(), 0); // Assuming cost input is already in smallest unit (e.g. IDR, not Ether)
+
       const tx = await contractInstance.submitMedicalRecord(
-        patientId,      // Alamat pasien
-        diagnosis,
-        Number(cost),   // Pastikan tipe data cost sesuai dengan kontrak (misal, uint)
-        treatment,
-        Number(duration) // Pastikan tipe data duration sesuai (misal, uint)
+        patientId,
+        ipfsHash,
+        costInSmallestUnit 
       );
       await tx.wait();
       toast({
         title: "Rekam Medis Terkirim",
-        description: `Rekam medis untuk pasien ${patientId.slice(0, 6)}...${patientId.slice(-4)} berhasil dikirim.`,
+        description: `Rekam medis untuk pasien ${patientId.slice(0, 6)}...${patientId.slice(-4)} berhasil dikirim ke blockchain.`,
       });
       
-      // Reset form
       setPatientId("");
       setDiagnosis("");
       setTreatment("");
       setCost("");
       setDuration("");
 
-      // Refresh daftar pasien atau update data pasien spesifik jika diperlukan
-      // fetchPatientsForHospital(connectedAccount); 
-      // Atau, jika submitMedicalRecord menambahkan pasien baru ke daftar RS, refresh:
-      if (connectedAccount) fetchPatientsForHospital(connectedAccount);
+      // Refetch data to update stats and lists
+      if (connectedAccount) {
+          fetchPatientsForHospital(connectedAccount);
+          fetchAllMedicalRecordsForHospital();
+      }
 
     } catch (error: any) {
-      console.error('Gagal mengirim rekam medis:', error);
-      toast({
-        title: "Gagal Mengirim Rekam Medis",
-        description: error?.data?.message || error?.reason || error.message || "Terjadi kesalahan.",
-        variant: "destructive",
-      });
+      console.error('Gagal mengirim rekam medis ke blockchain:', error);
+      if (!error.message?.includes("IPFS") && !error.message?.includes("backend")) {
+        toast({
+            title: "Gagal Mengirim ke Blockchain",
+            description: error?.data?.message || error?.reason || error.message || "Terjadi kesalahan.",
+            variant: "destructive",
+        });
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const filteredPatients = hospitalPatientList.filter(p => 
+  const filteredPatients = hospitalPatientList.filter(p =>
     p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     p.id.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-green-50">
-      <DashboardHeader 
+      <DashboardHeader
         title="Hospital Dashboard"
         subtitle="Medical Records Management"
         icon={Building2}
@@ -195,21 +343,18 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-blue-100">Total Patients</p>
-                  {/* Menggunakan panjang dari hospitalPatientList yang diambil dari kontrak */}
-                  <p className="text-3xl font-bold">{hospitalPatientList.length}</p>
+                  <p className="text-3xl font-bold">{isLoadingStats ? "..." : hospitalPatientList.length}</p>
                 </div>
                 <Users className="w-8 h-8 text-blue-200" />
               </div>
             </CardContent>
           </Card>
-
-          {/* Kartu statistik lain masih menggunakan mock data, perlu disesuaikan jika ada data dari kontrak */}
-          <Card className="bg-gradient-to-r from-emerald-500 to-emerald-600 text-white">
+           <Card className="bg-gradient-to-r from-emerald-500 to-emerald-600 text-white">
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-emerald-100">Total Medical Records</p>
-                  <p className="text-3xl font-bold">156</p> {/* Mock Data */}
+                  <p className="text-3xl font-bold">{isLoadingStats ? "..." : hospitalStats.totalMedicalRecords}</p>
                 </div>
                 <FileText className="w-8 h-8 text-emerald-200" />
               </div>
@@ -220,9 +365,9 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-purple-100">Records This Month</p>
-                  <p className="text-3xl font-bold">24</p> {/* Mock Data */}
+                  <p className="text-3xl font-bold">{isLoadingStats ? "..." : hospitalStats.recordsThisMonth}</p>
                 </div>
-                <Plus className="w-8 h-8 text-purple-200" />
+                <CalendarDays className="w-8 h-8 text-purple-200" /> {/* Changed Icon */}
               </div>
             </CardContent>
           </Card>
@@ -231,17 +376,18 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-orange-100">Avg. Treatment Cost</p>
-                  <p className="text-3xl font-bold">$2,450</p> {/* Mock Data */}
+                  {/* Assuming cost is in IDR or a similar currency without decimals for display */}
+                  <p className="text-3xl font-bold">{isLoadingStats ? "..." : `Rp ${hospitalStats.averageTreatmentCost.toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}</p>
                 </div>
-                <Building2 className="w-8 h-8 text-orange-200" /> {/* Icon mungkin perlu diganti */}
+                <DollarSign className="w-8 h-8 text-orange-200" /> {/* Changed Icon */}
               </div>
             </CardContent>
           </Card>
         </div>
 
         <div className="grid lg:grid-cols-3 gap-8">
-          {/* Submit Medical Record */}
           <Card className="lg:col-span-2 shadow-lg">
+{/* ... rest of your JSX for Submit Medical Record form ... */}
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FileText className="w-5 h-5 text-emerald-600" />
@@ -253,7 +399,7 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
                 <div>
                   <Label htmlFor="patient-id-input">Patient Wallet Address</Label>
                   <Input
-                    id="patient-id-input" // ID diubah agar unik dari state
+                    id="patient-id-input"
                     placeholder="0x..."
                     value={patientId}
                     onChange={(e) => setPatientId(e.target.value)}
@@ -261,17 +407,16 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
                   />
                 </div>
                 <div>
-                  <Label htmlFor="cost-input">Treatment Cost</Label>
+                  <Label htmlFor="cost-input">Treatment Cost (e.g., IDR)</Label>
                   <Input
                     id="cost-input"
                     type="number"
-                    placeholder="e.g., 100 (sesuaikan unit)"
+                    placeholder="e.g., 1000000"
                     value={cost}
                     onChange={(e) => setCost(e.target.value)}
                   />
                 </div>
               </div>
-              
               <div>
                 <Label htmlFor="diagnosis-input">Diagnosis</Label>
                 <Input
@@ -281,7 +426,6 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
                   onChange={(e) => setDiagnosis(e.target.value)}
                 />
               </div>
-              
               <div>
                 <Label htmlFor="treatment-input">Treatment</Label>
                 <Input
@@ -291,7 +435,6 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
                   onChange={(e) => setTreatment(e.target.value)}
                 />
               </div>
-              
               <div>
                 <Label htmlFor="duration-input">Duration (days)</Label>
                 <Input
@@ -302,13 +445,25 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
                   onChange={(e) => setDuration(e.target.value)}
                 />
               </div>
-              
-              <Button 
+              <Button
                 onClick={handleSubmitRecord}
+                disabled={isSubmitting}
                 className="w-full bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700"
               >
-                <Plus className="mr-2 w-4 h-4" />
-                Submit Medical Record
+                {isSubmitting ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Submitting...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-2 w-4 h-4" />
+                    Submit Medical Record
+                  </>
+                )}
               </Button>
             </CardContent>
           </Card>
@@ -331,20 +486,19 @@ const HospitalDashboard = ({ connectedAccount, onLogout }: HospitalDashboardProp
                   className="pl-10"
                 />
               </div>
-              
-              <div className="space-y-3 max-h-96 overflow-y-auto"> {/* Menambahkan scroll jika daftar panjang */}
+              <div className="space-y-3 max-h-96 overflow-y-auto">
                 {filteredPatients.length > 0 ? filteredPatients.map((patient) => (
                   <div key={patient.id} className="p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="font-semibold">{patient.name}</p>
-                      <Badge className="bg-green-100 text-green-800 hover:bg-green-200">
+                    <div className="flex items-center justify-between mb-1"> {/* Reduced mb */}
+                      <p className="font-semibold text-sm">{patient.name}</p> {/* text-sm */}
+                      <Badge className="bg-green-100 text-green-800 hover:bg-green-200 text-xs px-1.5 py-0.5"> {/* Smaller badge */}
                         {patient.status}
                       </Badge>
                     </div>
                     <p className="text-xs text-gray-600 font-mono mb-1 break-all">{patient.id}</p>
                     <div className="flex justify-between text-xs text-gray-500">
                       <span>Last visit: {patient.lastVisit}</span>
-                      {/* <span>{patient.records} records</span> */} {/* Komentari jika 'records' tidak akurat */}
+                      <span>Records: {patient.records}</span> {/* Display record count */}
                     </div>
                   </div>
                 )) : (
